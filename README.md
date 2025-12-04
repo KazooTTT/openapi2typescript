@@ -1,6 +1,6 @@
 # OpenAPI to TypeScript Generator (OpenAPI TypeScript 生成器)
 
-[![GitHub Repo stars](https://img.shields.io/github/stars/KazooTTT/openapi2typescript?style=social)](https://github.com/KazooTTT/openapi2typescript) [![npm (scoped)](https://img.shields.io/npm/v/@kazoottt/openapi2typescript)](https://www.npmjs.com/package/@kazoottt/openapi2typescript) ![GitHub tag (latest SemVer pre-release)](https://img.shields.io/github/v/tag/KazooTTT/openapi2typescript?include_prereleases)
+[![GitHub Repo stars](https://img.shields.io/github/stars/KazooTTT/openapi2typescript?style=social)](https://github.com/KazooTTT/openapi2typescript) [![npm (scoped)](https://img.shields.io/npm/v/@kazoottt/openapi2typescript)](https://www.npmjs.com/package/@kazoottt/openapi2typescript) ![GitHub tag (latest SemVer pre-release)](https://img.shields.io/github/v/tag/KazooTTT/openapi2typescript?include_prereleases) [![npm downloads](https://img.shields.io/npm/dm/@kazoottt/openapi2typescript)](https://www.npmjs.com/package/@kazoottt/openapi2typescript) [![License](https://img.shields.io/github/license/KazooTTT/openapi2typescript.svg)](https://github.com/KazooTTT/openapi2typescript/blob/main/LICENSE)
 
 [English](#english) | [中文](#chinese)
 
