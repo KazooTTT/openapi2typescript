@@ -79,19 +79,34 @@ function getTypeLastName(typeName) {
 }
 
 // 类型声明过滤关键字
-const resolveTypeName = (typeName: string) => {
+const resolveTypeName = (typeName: string, namespace?: string) => {
   if (ReservedDict.check(typeName)) {
     return `__openAPI__${typeName}`;
   }
   const typeLastName = getTypeLastName(typeName);
 
-  let name = typeLastName
+  // Decode URL-encoded Chinese characters (e.g., %E6%8A%A5%E5%91%8A%E5%B0%81%E9%9D%A2%E6%A0%B7%E5%BC%8F -> 报告封面样式)
+  let decodedTypeLastName = typeLastName;
+  if (typeLastName.includes('%')) {
+    try {
+      decodedTypeLastName = decodeURIComponent(typeLastName);
+    } catch (error) {
+      // If decoding fails, use original
+      decodedTypeLastName = typeLastName;
+    }
+  }
+
+  let name = decodedTypeLastName
     .replace(/[-_ ](\w)/g, (_all, letter) => letter.toUpperCase())
     .replace(/[^\w^\s^\u4e00-\u9fa5]/gi, '');
 
   // 当model名称是number开头的时候，ts会报错。这种场景一般发生在后端定义的名称是中文
   if (name === '_' || /^\d+$/.test(name)) {
-    Log('⚠️  models不能以number开头，原因可能是Model定义名称为中文, 建议联系后台修改');
+    Log(
+      `⚠️  模型名称不能以数字开头，原因可能是Model定义名称为中文，建议联系后台修改，module: ${
+        namespace || 'unknown'
+      }，模型名称: "${name}"，位置: ${JSON.stringify(typeName || 'undefined')}`,
+    );
     return `Pinyin_${name}`;
   }
   // 前面的解析可能会吧类似"2.0"之类的tag文字解析成首字母带数字的key
@@ -99,22 +114,24 @@ const resolveTypeName = (typeName: string) => {
   // 这里做一个统一处理
   if (/^\d/.test(name)) {
     const firstChar = parseInt(name[0]);
-    name = `${numberToWords.toWords(firstChar)}${name.substring(1)}`
+    name = `${numberToWords.toWords(firstChar)}${name.substring(1)}`;
   }
 
   if (!/[\u3220-\uFA29]/.test(name) && !/^\d$/.test(name)) {
     return name;
   }
   const noBlankName = name.replace(/ +/g, '');
-  return pinyin.convertToPinyin(noBlankName, '', true);
+  const pinyinName = pinyin.convertToPinyin(noBlankName, '', true);
+  // 首字母大写
+  return pinyinName ? `${pinyinName[0].toUpperCase()}${pinyinName.slice(1)}` : pinyinName;
 };
 
-function getRefName(refObject: any): string {
+function getRefName(refObject: any, namespace?: string): string {
   if (typeof refObject !== 'object' || !refObject.$ref) {
     return refObject;
   }
   const refPaths = refObject.$ref.split('/');
-  return resolveTypeName(refPaths[refPaths.length - 1]) as string;
+  return resolveTypeName(refPaths[refPaths.length - 1], namespace) as string;
 }
 
 const defaultGetType = (schemaObject: SchemaObject | undefined, namespace: string = ''): string => {
@@ -125,7 +142,7 @@ const defaultGetType = (schemaObject: SchemaObject | undefined, namespace: strin
     return schemaObject;
   }
   if (schemaObject.$ref) {
-    return [namespace, getRefName(schemaObject)].filter((s) => s).join('.');
+    return [namespace, getRefName(schemaObject, namespace)].filter((s) => s).join('.');
   }
 
   let { type } = schemaObject as any;
@@ -349,8 +366,8 @@ class ServiceGenerator {
 
         tags.forEach((tagString) => {
           const tag = this.config.isCamelCase
-            ? camelCase(resolveTypeName(tagString))
-            : resolveTypeName(tagString);
+            ? camelCase(resolveTypeName(tagString, this.config.namespace))
+            : resolveTypeName(tagString, this.config.namespace);
 
           if (!this.apiData[tag]) {
             this.apiData[tag] = [];
@@ -379,7 +396,7 @@ class ServiceGenerator {
     } catch (error) {
       Log(`🚥 serves 生成失败: ${error}`);
     }
-    if(!this.config.splitDeclare){
+    if (!this.config.splitDeclare) {
       // 生成 ts 类型声明
       this.genFileFromTemplate('typings.d.ts', 'interface', {
         namespace: this.config.namespace,
@@ -390,8 +407,7 @@ class ServiceGenerator {
         declareType: this.config.declareType || 'type',
         equalSymbol: (this.config.declareType || 'type') === 'type' ? '=' : '',
       });
-    }
-    else{
+    } else {
       // 创建存放声明文件的文件夹
       const typesDir = join(finalPath, 'types');
       if (!existsSync(typesDir)) {
@@ -402,8 +418,20 @@ class ServiceGenerator {
     }
     // 生成 controller 文件
     const prettierError = [];
+    const serviceTP = this.getServiceTP();
+
+    // 添加进度指示器
+    Log(`🔄 开始处理 ${serviceTP.length} 个服务...`);
+    let processedCount = 0;
+
     // 生成 service 统计
-    this.getServiceTP().forEach((tp) => {
+    serviceTP.forEach((tp) => {
+      processedCount++;
+      Log(
+        `📊  服务生成进度: ${processedCount}/${serviceTP.length} (${Math.round(
+          (processedCount / serviceTP.length) * 100,
+        )}%)`,
+      );
       // 根据当前数据源类型选择恰当的 controller 模版
       const template = 'serviceController';
       const hasError = this.genFileFromTemplate(
@@ -452,7 +480,10 @@ class ServiceGenerator {
     const namespace = this.config.namespace ? `${this.config.namespace}.` : '';
     const typeName = this.config?.hook?.customTypeName?.(data) || this.getFuncationName(data);
 
-    return resolveTypeName(`${namespace}${typeName ?? data.operationId}Params`);
+    return resolveTypeName(
+      `${namespace}${typeName ?? data.operationId}Params`,
+      this.config.namespace,
+    );
   }
 
   public getServiceTP() {
@@ -499,8 +530,9 @@ class ServiceGenerator {
               );
               if (newApi.extensions && newApi.extensions['x-antTech-description']) {
                 const { extensions } = newApi;
-                const { apiName, antTechVersion, productCode, antTechApiName } =
-                  extensions['x-antTech-description'];
+                const { apiName, antTechVersion, productCode, antTechApiName } = extensions[
+                  'x-antTech-description'
+                ];
                 formattedPath = antTechApiName || formattedPath;
                 this.mappings.push({
                   antTechApi: formattedPath,
@@ -837,7 +869,12 @@ class ServiceGenerator {
 
           const getDefinesType = () => {
             if (result.type) {
-              return (defines[typeName] as SchemaObject).type === 'object' || result.type;
+              const schemaType = (defines[typeName] as SchemaObject).type;
+              if (schemaType === 'object') {
+                return schemaType;
+              }
+              // 转为 js 支持的数据类型
+              return this.getType(defines[typeName]);
             }
             return 'Record<string, any>';
           };
@@ -1147,21 +1184,21 @@ class ServiceGenerator {
     }
     const allSchemas = components.schemas;
     const tagTypes: Record<string, any[]> = {};
-    Object.keys(this.apiData).forEach(tag => {
+    Object.keys(this.apiData).forEach((tag) => {
       tagTypes[tag] = [];
     });
     // 将schema按使用情况分配到对应的tag
-    Object.keys(allSchemas).forEach(typeName => {
+    Object.keys(allSchemas).forEach((typeName) => {
       const schema = allSchemas[typeName];
       const result = this.resolveObject(schema);
-      const usedInTags = this.findTagsUsingType(typeName); 
+      const usedInTags = this.findTagsUsingType(typeName);
       if (usedInTags.length > 0) {
         // 将类型添加到使用它的所有tag中
-        usedInTags.forEach(tag => {
+        usedInTags.forEach((tag) => {
           if (tagTypes[tag]) {
             tagTypes[tag].push({
               typeName: resolveTypeName(typeName),
-              type: this.getDefinesType(result),
+              type: this.getDefinesType(result, schema),
               parent: result.parent,
               props: result.props || [],
               isEnum: result.isEnum,
@@ -1174,7 +1211,7 @@ class ServiceGenerator {
         if (firstTag) {
           tagTypes[firstTag].push({
             typeName: resolveTypeName(typeName),
-            type: this.getDefinesType(result),
+            type: this.getDefinesType(result, schema),
             parent: result.parent,
             props: result.props || [],
             isEnum: result.isEnum,
@@ -1184,14 +1221,27 @@ class ServiceGenerator {
     });
 
     // 为每个tag生成对应的类型文件到types目录
-    Object.keys(tagTypes).forEach(tag => {
+    const tagKeys = Object.keys(tagTypes);
+    Log(`🔄 开始处理 ${tagKeys.length} 个标签的类型文件生成...`);
+    let processedTagCount = 0;
+
+    tagKeys.forEach((tag) => {
+      processedTagCount++;
+      if (processedTagCount % 5 === 0 || processedTagCount === tagKeys.length) {
+        Log(
+          `📊 类型文件生成进度: ${processedTagCount}/${tagKeys.length} (${Math.round(
+            (processedTagCount / tagKeys.length) * 100,
+          )}%)`,
+        );
+      }
+
       if (tagTypes[tag].length > 0) {
         const fileName = `${this.replaceDot(tag)}.d.ts`;
-        
+
         // 添加该tag下API的参数类型
         const tagApiData = this.apiData[tag];
         if (tagApiData) {
-          tagApiData.forEach(api => {
+          tagApiData.forEach((api) => {
             const props = [];
             if (api.parameters) {
               api.parameters.forEach((parameter: any) => {
@@ -1203,7 +1253,7 @@ class ServiceGenerator {
                 });
               });
             }
-            
+
             if (props.length > 0) {
               tagTypes[tag].push({
                 typeName: this.getTypeName({ ...api, method: api.method, path: api.path }),
@@ -1230,14 +1280,16 @@ class ServiceGenerator {
   }
   private findTagsUsingType(typeName: string): string[] {
     const usedInTags: string[] = [];
-    Object.keys(this.apiData).forEach(tag => {
+    Object.keys(this.apiData).forEach((tag) => {
       const tagApis = this.apiData[tag];
-      const isUsed = tagApis.some(api => {
+      const isUsed = tagApis.some((api) => {
         if (api.parameters) {
           return api.parameters.some((param: any) => {
             const resolvedParam = this.resolveRefObject(param);
-            return resolvedParam.schema?.$ref?.includes(typeName) || 
-                   resolvedParam.$ref?.includes(typeName);
+            return (
+              resolvedParam.schema?.$ref?.includes(typeName) ||
+              resolvedParam.$ref?.includes(typeName)
+            );
           });
         }
         if (api.requestBody) {
@@ -1260,20 +1312,25 @@ class ServiceGenerator {
             }
           }
         }
-        
+
         return false;
       });
-      
+
       if (isUsed) {
         usedInTags.push(tag);
       }
     });
-    
+
     return usedInTags;
   }
-  private getDefinesType(result: any) {
+  private getDefinesType(result: any, schemaObject?: any) {
     if (result.type) {
-      return (result as any).type === 'object' || result.type;
+      const schemaType = (result as any).type;
+      if (schemaType === 'object') {
+        return schemaType;
+      }
+      // For primitive types, ensure proper type conversion
+      return schemaObject ? this.getType(schemaObject) : result.type;
     }
     return 'Record<string, any>';
   }

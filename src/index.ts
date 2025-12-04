@@ -5,6 +5,7 @@ import https from 'https';
 import fetch from 'node-fetch';
 import type { OpenAPIObject, OperationObject, SchemaObject } from 'openapi3-ts';
 import converter from 'swagger2openapi';
+// import converter from './swagger2openapi';
 import Log from './log';
 import { mockGenerator } from './mockGenerator';
 import { ServiceGenerator } from './serviceGenerator';
@@ -18,6 +19,72 @@ const getImportStatement = (requestLibPath: string) => {
     return `import request from '${requestLibPath}'`;
   }
   return `import { request } from "umi"`;
+};
+
+/**
+ * swagger 中 definitions 名称包含 `/` 时，JSON Pointer 无法直接解析。
+ * 在转换前统一重命名为安全的 key，并同步修正所有 $ref。
+ */
+const sanitizeSwaggerDefinitions = (swagger: any) => {
+  if (!swagger || typeof swagger !== 'object' || !swagger.definitions) {
+    return swagger;
+  }
+
+  const definitions = swagger.definitions;
+  const renameMap = new Map<string, string>();
+  const usedNames = new Set(Object.keys(definitions));
+
+  const ensureUnique = (name: string) => {
+    let candidate = name;
+    let idx = 1;
+    while (usedNames.has(candidate)) {
+      candidate = `${name}_${idx}`;
+      idx += 1;
+    }
+    usedNames.add(candidate);
+    return candidate;
+  };
+
+  Object.keys(definitions).forEach((rawName) => {
+    if (!rawName.includes('/')) {
+      return;
+    }
+    const sanitizedBase = rawName.replace(/[\\/]/g, '_');
+    const safeName = ensureUnique(sanitizedBase);
+    definitions[safeName] = definitions[rawName];
+    delete definitions[rawName];
+    renameMap.set(rawName, safeName);
+  });
+
+  if (!renameMap.size) {
+    return swagger;
+  }
+
+  const normalizePointer = (key: string) => key.replace(/~1/g, '/').replace(/~0/g, '~');
+
+  const replaceRef = (node: any): void => {
+    if (!node || typeof node !== 'object') {
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach(replaceRef);
+      return;
+    }
+    if (typeof node.$ref === 'string') {
+      const match = node.$ref.match(/^#\/definitions\/(.+)$/);
+      if (match) {
+        const refKey = normalizePointer(match[1]);
+        const newName = renameMap.get(refKey);
+        if (newName) {
+          node.$ref = `#/definitions/${newName}`;
+        }
+      }
+    }
+    Object.values(node).forEach(replaceRef);
+  };
+
+  replaceRef(swagger);
+  return swagger;
 };
 
 export type GenerateServiceProps = {
@@ -171,15 +238,17 @@ export type GenerateServiceProps = {
     msw?: boolean;
   };
   /**切割类型声明文件,默认为false*/
-  splitDeclare?:boolean
+  splitDeclare?: boolean;
 };
 
 const converterSwaggerToOpenApi = (swagger: any) => {
   if (!swagger.swagger) {
     return swagger;
   }
+  // swagger2openapi 对包含 `/` 的 definition 名称无法解析，先行规范化
+  const normalizedSwagger = sanitizeSwaggerDefinitions(JSON.parse(JSON.stringify(swagger)));
   return new Promise((resolve, reject) => {
-    converter.convertObj(swagger, {}, (err, options) => {
+    converter.convertObj(normalizedSwagger, {}, (err, options) => {
       Log(['💺 将 Swagger 转化为 openAPI']);
       if (err) {
         reject(err);
@@ -197,10 +266,15 @@ export const getSchema = async (schemaPath: string, authorization?: string) => {
       const agent = new protocol.Agent({
         rejectUnauthorized: false,
       });
-      const headers = authorization ? {
-        authorization,
-      } : {};
-      const json = await fetch(schemaPath, { agent, headers: authorization? headers: {} }).then((rest) => rest.json());
+      const headers = authorization
+        ? {
+            authorization,
+          }
+        : {};
+      const json = await fetch(schemaPath, {
+        agent,
+        headers: authorization ? headers : {},
+      }).then((rest) => rest.json());
       return json;
     } catch (error) {
       // eslint-disable-next-line no-console
