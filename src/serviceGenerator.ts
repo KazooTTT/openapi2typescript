@@ -59,7 +59,10 @@ function getTypeLastName(typeName) {
   const childrenTypeName = tempTypeName?.match(/\[\[.+\]\]/g)?.[0];
   if (!childrenTypeName) {
     let publicKeyToken = (tempTypeName.split('PublicKeyToken=')?.[1] ?? '').replace('null', '');
-    const firstTempTypeName = tempTypeName.split(',')?.[0] ?? tempTypeName;
+    const firstTempTypeName =
+      tempTypeName.includes('«') || tempTypeName.includes('»')
+        ? tempTypeName
+        : tempTypeName.split(',')?.[0] ?? tempTypeName;
     let typeLastName = firstTempTypeName.split('/').pop().split('.').pop();
     if (typeLastName.endsWith('[]')) {
       typeLastName = typeLastName.substring(0, typeLastName.length - 2) + 'Array';
@@ -230,36 +233,66 @@ const defaultGetType = (schemaObject: SchemaObject | undefined, namespace: strin
     return `(${schemaObject.allOf.map((item) => defaultGetType(item, namespace)).join(' & ')})`;
   }
   if (schemaObject.type === 'object' || schemaObject.properties) {
-    if (!Object.keys(schemaObject.properties || {}).length) {
+    const properties = schemaObject.properties || {};
+    const hasProperties = Object.keys(properties).length > 0;
+    const additionalProperties = (schemaObject as any).additionalProperties;
+
+    // 如果没有 properties 但有 additionalProperties，生成 Record 类型
+    if (!hasProperties && additionalProperties !== undefined) {
+      if (additionalProperties === true) {
+        return 'Record<string, any>';
+      }
+      if (typeof additionalProperties === 'object' && additionalProperties !== null) {
+        const valueType = defaultGetType(additionalProperties, namespace);
+        return `Record<string, ${valueType}>`;
+      }
       return 'Record<string, any>';
     }
-    return `{ ${Object.keys(schemaObject.properties)
-      .map((key) => {
-        let required = false;
-        if (isBoolean(schemaObject.required) && schemaObject.required) {
-          required = true;
+
+    // 如果有 properties，生成对象类型
+    if (hasProperties) {
+      const propertiesStr = Object.keys(properties)
+        .map((key) => {
+          let required = false;
+          if (isBoolean(schemaObject.required) && schemaObject.required) {
+            required = true;
+          }
+          if (isArray(schemaObject.required) && schemaObject.required.includes(key)) {
+            required = true;
+          }
+          if ('required' in (properties[key] || {}) && ((properties[key] || {}) as any).required) {
+            required = true;
+          }
+          /**
+           * 将类型属性变为字符串，兼容错误格式如：
+           * 3d_tile(数字开头)等错误命名，
+           * 在后面进行格式化的时候会将正确的字符串转换为正常形式，
+           * 错误的继续保留字符串。
+           * */
+          return `'${key}'${required ? '' : '?'}: ${defaultGetType(
+            properties && properties[key],
+            namespace,
+          )}; `;
+        })
+        .join('');
+
+      // 如果还有 additionalProperties，需要添加索引签名
+      if (additionalProperties !== undefined) {
+        let indexSignature = '';
+        if (additionalProperties === true) {
+          indexSignature = '[key: string]: any; ';
+        } else if (typeof additionalProperties === 'object' && additionalProperties !== null) {
+          const valueType = defaultGetType(additionalProperties, namespace);
+          indexSignature = `[key: string]: ${valueType}; `;
         }
-        if (isArray(schemaObject.required) && schemaObject.required.includes(key)) {
-          required = true;
-        }
-        if (
-          'required' in (schemaObject.properties[key] || {}) &&
-          ((schemaObject.properties[key] || {}) as any).required
-        ) {
-          required = true;
-        }
-        /**
-         * 将类型属性变为字符串，兼容错误格式如：
-         * 3d_tile(数字开头)等错误命名，
-         * 在后面进行格式化的时候会将正确的字符串转换为正常形式，
-         * 错误的继续保留字符串。
-         * */
-        return `'${key}'${required ? '' : '?'}: ${defaultGetType(
-          schemaObject.properties && schemaObject.properties[key],
-          namespace,
-        )}; `;
-      })
-      .join('')}}`;
+        return `{ ${propertiesStr}${indexSignature}}`;
+      }
+
+      return `{ ${propertiesStr}}`;
+    }
+
+    // 既没有 properties 也没有 additionalProperties
+    return 'Record<string, any>';
   }
   return 'any';
 };
@@ -376,6 +409,7 @@ class ServiceGenerator {
             path: `${basePath}${p}`,
             method,
             ...operationObject,
+            originalTag: tagString, // 保存原始标签名
           });
         });
       });
@@ -406,6 +440,7 @@ class ServiceGenerator {
         disableTypeCheck: false,
         declareType: this.config.declareType || 'type',
         equalSymbol: (this.config.declareType || 'type') === 'type' ? '=' : '',
+        tagName: 'All',
       });
     } else {
       // 创建存放声明文件的文件夹
@@ -491,6 +526,12 @@ class ServiceGenerator {
       .map((tag, index) => {
         // functionName tag 级别防重
         const tmpFunctionRD: Record<string, number> = {};
+
+        // 获取原始标签名（取第一个API的originalTag）
+        const originalTag =
+          this.apiData[tag] && this.apiData[tag][0] && this.apiData[tag][0].originalTag
+            ? this.apiData[tag][0].originalTag
+            : tag;
 
         const genParams = this.apiData[tag]
           .filter(
@@ -655,6 +696,7 @@ class ServiceGenerator {
         return {
           genType: 'ts',
           className,
+          tagName: originalTag,
           instanceName: `${fileName[0]?.toLowerCase()}${fileName.substr(1)}`,
           list: genParams,
         };
@@ -871,10 +913,17 @@ class ServiceGenerator {
             if (result.type) {
               const schemaType = (defines[typeName] as SchemaObject).type;
               if (schemaType === 'object') {
-                return schemaType;
+                // 如果 schemaType 是 'object'，应该使用 getType 来生成正确的类型定义
+                return this.getType(defines[typeName]);
               }
               // 转为 js 支持的数据类型
               return this.getType(defines[typeName]);
+            }
+            // 如果没有 result.type，但有 props，说明是对象类型
+            // 检查是否有 additionalProperties
+            const schema = defines[typeName] as SchemaObject;
+            if (schema && (schema.type === 'object' || schema.properties)) {
+              return this.getType(schema);
             }
             return 'Record<string, any>';
           };
@@ -1238,6 +1287,12 @@ class ServiceGenerator {
       if (tagTypes[tag].length > 0) {
         const fileName = `${this.replaceDot(tag)}.d.ts`;
 
+        // 获取原始标签名（取第一个API的originalTag）
+        const originalTag =
+          this.apiData[tag] && this.apiData[tag][0] && this.apiData[tag][0].originalTag
+            ? this.apiData[tag][0].originalTag
+            : tag;
+
         // 添加该tag下API的参数类型
         const tagApiData = this.apiData[tag];
         if (tagApiData) {
@@ -1274,6 +1329,7 @@ class ServiceGenerator {
           disableTypeCheck: false,
           declareType: this.config.declareType || 'type',
           equalSymbol: (this.config.declareType || 'type') === 'type' ? '=' : '',
+          tagName: originalTag,
         });
       }
     });
@@ -1327,10 +1383,16 @@ class ServiceGenerator {
     if (result.type) {
       const schemaType = (result as any).type;
       if (schemaType === 'object') {
-        return schemaType;
+        // 如果 schemaType 是 'object'，应该使用 getType 来生成正确的类型定义
+        return schemaObject ? this.getType(schemaObject) : 'object';
       }
       // For primitive types, ensure proper type conversion
       return schemaObject ? this.getType(schemaObject) : result.type;
+    }
+    // 如果没有 result.type，但有 props，说明是对象类型
+    // 检查是否有 additionalProperties
+    if (schemaObject && (schemaObject.type === 'object' || schemaObject.properties)) {
+      return this.getType(schemaObject);
     }
     return 'Record<string, any>';
   }
