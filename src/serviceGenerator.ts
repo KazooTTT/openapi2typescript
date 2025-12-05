@@ -477,6 +477,7 @@ class ServiceGenerator {
           requestOptionsType: this.config.requestOptionsType,
           requestImportStatement: this.config.requestImportStatement,
           disableTypeCheck: false,
+          responseDataOnly: this.config.responseDataOnly || false,
           ...tp,
         },
       );

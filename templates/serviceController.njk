@@ -104,10 +104,16 @@ export async function {{ api.functionName }}(
   {% endif %}
   {% endif -%}
 
+  {# 响应类型：默认完整类型，开启 responseDataOnly 时拼接 ['data'] 后缀 #}
+  {%- if genType === "ts" and responseDataOnly -%}
+  {% set responseType = api.response.type ~ "['data']" %}
+  {%- else -%}
+  {% set responseType = api.response.type %}
+  {%- endif -%}
   {% if api.hasPathVariables or api.hasApiPrefix -%}
-  return request{{ ("<" + api.response.type + ">") | safe if genType === "ts" }}(`{{ api.path | safe }}`, {
+  return request{{ ("<" + responseType + ">") | safe if genType === "ts" }}(`{{ api.path | safe }}`, {
   {% else -%}
-  return request{{ ("<" + api.response.type + ">") | safe if genType === "ts" }}('{{ api.path }}', {
+  return request{{ ("<" + responseType + ">") | safe if genType === "ts" }}('{{ api.path }}', {
   {% endif -%}
     method: '{{ api.method | upper }}',
     {%- if api.hasHeader and api.body.mediaType not in ["multipart/form-data"]%}

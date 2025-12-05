@@ -110,6 +110,7 @@ npm run openapi2ts
 | enumStyle | No | Enum style | string-literal \| enum | string-literal |
 | nullable | No | Use null instead of optional | boolean | false |
 | dataFields | No | Data fields in response | string[] | - |
+| responseDataOnly | No | Only return the type of response['data'] field | boolean | false |
 | isCamelCase | No | Use camelCase for files and functions | boolean | true |
 | declareType | No | Interface declaration type | type/interface | type |
 | splitDeclare | No | Generate a separate .d.ts file for each tag group. | boolean | - |
@@ -231,6 +232,7 @@ npm run openapi2ts
 | enumStyle | 否 | 枚举样式 | string-literal \| enum | string-literal |
 | nullable | 否 | 使用 null 代替可选 | boolean | false |
 | dataFields | 否 | response 中数据字段 | string[] | - |
+| responseDataOnly | 否 | 是否只返回 response['data'] 字段的类型 | boolean | false |
 | isCamelCase | 否 | 小驼峰命名文件和请求函数 | boolean | true |
 | declareType | 否 | interface 声明类型 | type/interface | type |
 | splitDeclare | 否 | 每个 tag 组一个独立的.d.ts. | boolean | - |

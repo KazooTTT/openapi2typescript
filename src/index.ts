@@ -208,6 +208,19 @@ export type GenerateServiceProps = {
   dataFields?: string[];
 
   /**
+   * 是否只返回 response['data'] 字段的类型
+   * 如果为 true，生成的函数返回类型将直接是 data 字段的类型，而不是完整的 Response 类型
+   * 默认为 false
+   * @example
+   * // responseDataOnly: false (默认)
+   * // 返回类型: Promise<{ code: number; data: T; msg: string }>
+   *
+   * // responseDataOnly: true
+   * // 返回类型: Promise<T>
+   */
+  responseDataOnly?: boolean;
+
+  /**
    * 模板文件、请求函数采用小驼峰命名
    */
   isCamelCase?: boolean;
